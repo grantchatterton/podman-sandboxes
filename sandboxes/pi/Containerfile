@@ -1,0 +1,15 @@
+FROM sbx-base
+
+RUN mkdir -p /home/node/.pi/agent \
+  && chmod 700 /home/node/.pi \
+  && chown -R node:node /home/node/.pi
+
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+  && npm cache clean --force
+
+ENV PI_CODING_AGENT_DIR=/home/node/.pi/agent
+ENV PI_SKIP_VERSION_CHECK=1
+ENV PI_TELEMETRY=0
+
+USER node
+ENTRYPOINT ["pi"]

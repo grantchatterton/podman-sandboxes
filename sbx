@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# sbx: build and run hardened Podman sandbox containers.
+#
+# Each sandbox lives in sandboxes/<name>/ and contains a Containerfile that
+# builds on top of the shared base image (base/Containerfile). A sandbox may
+# also include an optional `config` file, sourced at run time, to customize
+# the podman run invocation.
+
+SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+readonly SCRIPT_DIR
+
+readonly BASE_DIR="$SCRIPT_DIR/base"
+
+readonly SANDBOXES_DIR="$SCRIPT_DIR/sandboxes"
+readonly SANDBOX_IMAGE_TAG_PREFIX="localhost/sbx-"
+readonly SANDBOX_NUM_CPUS=4
+readonly SANDBOX_MEMORY_MB=8192
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sbx help
+  sbx build <name>
+  sbx run <name> [-- <agent args>...]
+
+Commands:
+  help
+      Show this usage text.
+  build <name>
+      Build the image for sandbox <name>. The shared base Containerfile is
+      prepended as the `sbx-base` build stage, so base and sandbox are built
+      together (unchanged layers are reused from the build cache).
+  run <name> [-- <agent args>...]
+      Run sandbox <name> with the current directory bind-mounted read-write
+      at the same path. The image is built first if it does not exist yet.
+      Refuses to run from your home directory, any of its parents, or /.
+
+Arguments:
+  <name>           Required. Sandbox name, a directory under sandboxes/.
+  -- <agent args>  Optional. Passed to the sandbox's agent as its command args (e.g., `sbx run claude -- --help` [`--help` passed to `claude` instance]).
+EOF
+}
+
+usage_die() {
+  usage >&2
+  exit 1
+}
+
+# Builds the image for sandbox $1. The base Containerfile is concatenated in
+# front of the sandbox's Containerfile, so it becomes the `sbx-base` stage of a
+# single build; no separate base image is created. Layers are cached, so use
+# `podman build --no-cache` (or `podman image prune`) to force fresh installs.
+build_sbx_image() {
+  if [[ ! -d "$BASE_DIR" ]]; then
+    die "Base sandbox directory not found '$BASE_DIR'"
+  fi
+
+  local -r base_containerfile="$BASE_DIR/Containerfile"
+  if [[ ! -f "$base_containerfile" ]]; then
+    die "Base sandbox containerfile not found '$base_containerfile'"
+  fi
+
+  local -r sbx_name="$1"
+
+  local -r sbx_dir="$SANDBOXES_DIR/$sbx_name"
+  if [[ ! -d "$sbx_dir" ]]; then
+    die "Sandbox not found '$sbx_name'"
+  fi
+
+  local -r sbx_containerfile="$sbx_dir/Containerfile"
+  if [[ ! -f "$sbx_containerfile" ]]; then
+    die "Sandbox containerfile not found for '$sbx_name'"
+  fi
+
+  podman build -t "${SANDBOX_IMAGE_TAG_PREFIX}$sbx_name" -f <(cat -- "$base_containerfile" "$sbx_containerfile") -- "$sbx_dir"
+}
+
+# sbx build <name>: (re)builds the sandbox image.
+cmd_build() {
+  if [[ "$#" -ne 1 ]]; then
+    usage_die
+  fi
+
+  build_sbx_image "$1"
+}
+
+# sbx run <name> [-- agent args...]: runs the sandbox with the current directory
+# bind-mounted at the same path, building its image first if needed. Refuses to
+# mount $HOME, any of its ancestors, or /. Arguments after `--` are passed to
+# the container's agent instance as its command.
+cmd_run() {
+  if [[ "$#" -eq 0 ]]; then
+    usage_die
+  fi
+
+  local -r sbx_name="$1"
+  shift
+
+  # Anything after <name> must be introduced by `--`.
+  if [[ "$#" -gt 0 ]]; then
+    if [[ "$1" != "--" ]]; then
+      usage_die
+    fi
+    shift
+  fi
+
+  local -r sbx_dir="$SANDBOXES_DIR/$sbx_name"
+  if [[ ! -d "$sbx_dir" ]]; then
+    die "Sandbox not found '$sbx_name'"
+  fi
+
+  # Resolve symlinks so the mount path matches the real host path.
+  local cwd
+  cwd="$(pwd -P)"
+  readonly cwd
+
+  # Refuse to mount the home directory or any of its ancestors (including /):
+  # that would hand the agent read-write access to SSH keys, credentials and
+  # dotfiles.
+  local home
+  home="$(readlink -f -- "${HOME:-/}")"
+  readonly home
+  if [[ "$cwd" == "/" || "$home/" == "$cwd/"* ]]; then
+    die "Refusing to mount '$cwd': it is your home directory or one of its parents. Run sbx from a project directory instead."
+  fi
+
+  local -r sbx_image_tag="${SANDBOX_IMAGE_TAG_PREFIX}$sbx_name"
+  if ! podman image exists "$sbx_image_tag"; then
+    build_sbx_image "$sbx_name"
+  fi
+
+  local -a podman_run_args=(
+    --rm
+    --cap-drop ALL
+    --security-opt no-new-privileges
+    --userns "keep-id:uid=1000,gid=1000"
+    --pids-limit 1024
+    --cpus "$SANDBOX_NUM_CPUS"
+    --memory "${SANDBOX_MEMORY_MB}m"
+    --read-only
+    --tmpfs "/tmp:rw,nodev,nosuid,mode=1777"
+    --volume "$cwd:$cwd"
+    --workdir "$cwd"
+    --env "TERM=${TERM:-xterm-256color}"
+    --env "COLORTERM=${COLORTERM:-truecolor}"
+  )
+
+  # Only attach stdin/allocate a TTY when we have them, so the script also
+  # works in pipes and non-interactive contexts.
+  if [[ -t 0 ]]; then
+    podman_run_args+=(--interactive)
+
+    if [[ -t 1 ]]; then
+      podman_run_args+=(--tty)
+    fi
+  fi
+
+  # Pass through the host's global git identity (user.name/user.email) so
+  # commits made in the sandbox are attributed correctly. No credentials are
+  # shared.
+  local config_key config_value
+  for config_key in name email; do
+    config_value="$(git config --global "user.$config_key" 2>/dev/null || true)"
+    if [[ -n "$config_value" ]]; then
+      podman_run_args+=(
+        --env "GIT_AUTHOR_${config_key^^}=$config_value"
+        --env "GIT_COMMITTER_${config_key^^}=$config_value"
+      )
+    fi
+  done
+
+  # Prefer the krun runtime (microVM isolation) when installed. krun sizes the
+  # VM from these annotations, so pass the same CPU/memory limits here too.
+  if command -v krun >/dev/null; then
+    podman_run_args+=(
+      --runtime krun
+      --annotation "krun.cpus=$SANDBOX_NUM_CPUS"
+      --annotation "krun.ram_mib=$SANDBOX_MEMORY_MB"
+    )
+  fi
+
+  # The sandbox's optional config file is sourced here, in this function's
+  # scope, so it can append to podman_extra_run_args (e.g. extra volumes or
+  # env vars) or modify podman_run_args.
+  local -a podman_extra_run_args=()
+
+  local -r sbx_config="$sbx_dir/config"
+  if [[ -f "$sbx_config" ]]; then
+    # shellcheck disable=SC1090
+    source "$sbx_config"
+  fi
+
+  exec podman run "${podman_run_args[@]}" "${podman_extra_run_args[@]}" "$sbx_image_tag" "$@"
+}
+
+main() {
+  if [[ "$#" -eq 0 ]]; then
+    usage_die
+  fi
+
+  local -r cmd="$1"
+  shift
+
+  case "$cmd" in
+  help | -h | --help) usage ;;
+  build) cmd_build "$@" ;;
+  run) cmd_run "$@" ;;
+  *) usage_die ;;
+  esac
+}
+
+main "$@"

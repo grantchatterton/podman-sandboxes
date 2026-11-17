@@ -1,0 +1,5 @@
+# shellcheck shell=bash
+
+podman_extra_run_args+=(
+  --volume "pi-agent-home:/home/node/.pi/agent"
+)

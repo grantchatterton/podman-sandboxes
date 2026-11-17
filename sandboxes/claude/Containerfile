@@ -1,0 +1,23 @@
+FROM docker.io/library/debian:trixie-slim AS install
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.local/bin:$PATH"
+
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+FROM sbx-base
+
+RUN mkdir -p /home/node/.claude \
+  && chmod 700 /home/node/.claude \
+  && chown -R node:node /home/node/.claude
+
+COPY --from=install /root/.local/bin/claude /usr/local/bin/claude
+
+ENV CLAUDE_CONFIG_DIR=/home/node/.claude
+ENV DISABLE_UPDATES=1
+
+USER node
+ENTRYPOINT ["claude"]
