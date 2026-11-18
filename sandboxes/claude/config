@@ -1,5 +1,7 @@
 # shellcheck shell=bash
 
-podman_extra_run_args+=(
-  --volume "claude-agent-home:/home/node/.claude"
-)
+podman_extra_run_args+=(--volume "claude-agent-home:/home/node/.claude")
+
+if [[ -d "$HOME/.claude/skills" ]]; then
+  podman_extra_run_args+=(--volume "$HOME/.claude/skills:/home/node/.claude/skills:ro")
+fi
