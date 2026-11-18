@@ -135,6 +135,7 @@ cmd_run() {
     --workdir "$cwd"
     --env "TERM=${TERM:-xterm-256color}"
     --env "COLORTERM=${COLORTERM:-truecolor}"
+    --env "npm_config_cache=/tmp/.npm-cache"
   )
 
   # Only attach stdin/allocate a TTY when we have them, so the script also
