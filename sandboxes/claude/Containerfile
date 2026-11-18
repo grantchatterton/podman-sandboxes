@@ -14,10 +14,21 @@ RUN mkdir -p /home/node/.claude \
   && chmod 700 /home/node/.claude \
   && chown -R node:node /home/node/.claude
 
+ENV CLAUDE_APPEND_SYSTEM_PROMPT_FILE=/opt/claude/APPEND_SYSTEM_PROMPT.txt
+COPY <<'EOF' ${CLAUDE_APPEND_SYSTEM_PROMPT_FILE}
+You are working inside a hardened Podman container as non-root `node` user (no sudo/apt access).
+- Root FS is read-only
+- Writable: cwd (bind-mounted from host), /tmp, /home/node/.claude
+- Installed tools: bash, fd-find (fd), git, jq, node/npm, ripgrep (rg)
+EOF
+
 COPY --from=install /root/.local/bin/claude /usr/local/bin/claude
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
 ENV DISABLE_UPDATES=1
 
 USER node
-ENTRYPOINT ["claude"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
