@@ -135,4 +135,8 @@ directory as the build context. Images are tagged `localhost/sbx-<name>`.
    )
    ```
 
+   Every sandbox gets `npm_config_cache=/tmp/.npm-cache` at run time, so npm
+   has a writable cache on the `/tmp` tmpfs. The `ENV NPM_CONFIG_CACHE` line
+   in the example above covers the build step.
+
 3. Run `sbx run <name>`.
