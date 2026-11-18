@@ -4,6 +4,6 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates fd-find git jq ripgrep \
   && rm -rf /var/lib/apt/lists/*
 
-RUN ln -s "$(command -v fdfind)" /usr/local/bin/fd
+RUN ln -s "$(readlink -f -- "$(command -v fdfind)")" /usr/local/bin/fd
 
 ENV NPM_CONFIG_CACHE=/tmp/.npm-cache
