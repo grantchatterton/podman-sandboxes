@@ -56,6 +56,11 @@ persist between runs without touching your host home directory. Agent
 self-updates, version checks and telemetry are turned off where the agent
 supports it.
 
+The `claude` sandbox also bind-mounts your host `~/.claude/skills`
+directory read-only at `/home/node/.claude/skills`, if that directory exists.
+Skills you add on the host are available inside the container without
+copying them into the state volume.
+
 ## Security model
 
 Every sandbox runs with:
@@ -84,25 +89,29 @@ call their model APIs.
 
 ```
 sbx                         # the CLI
-base/Containerfile          # shared base stage (sbx-base): Node, git, ripgrep, fd
 sandboxes/<name>/
-  Containerfile             # sandbox image, starts FROM sbx-base
+  Containerfile             # standalone sandbox image definition
   config                    # optional; sourced by `sbx run` to add podman args
 ```
 
-`sbx build` concatenates `base/Containerfile` and the sandbox's
-`Containerfile` into a single build, so the base is a build stage, not a
-separately tagged image. Images are tagged `localhost/sbx-<name>`. The build
-context is the sandbox's directory.
+Each sandbox is standalone: its `Containerfile` is a complete image
+definition with no shared base. `sbx build` builds it with the sandbox's
+directory as the build context. Images are tagged `localhost/sbx-<name>`.
 
 ## Adding a sandbox
 
-1. Create `sandboxes/<name>/Containerfile`. Start from `sbx-base`, install
-   the agent, switch to `USER node`, and set `ENTRYPOINT` to the agent's
-   command:
+1. Create `sandboxes/<name>/Containerfile`. Start from the Node base image,
+   install the tools you need, install the agent, switch to `USER node`, and
+   set `ENTRYPOINT` to the agent's command:
 
    ```dockerfile
-   FROM sbx-base
+   FROM docker.io/library/node:26.13.0-trixie-slim
+
+   RUN apt-get update \
+     && apt-get install -y --no-install-recommends bash ca-certificates git jq ripgrep \
+     && rm -rf /var/lib/apt/lists/*
+
+   ENV NPM_CONFIG_CACHE=/tmp/.npm-cache
 
    RUN mkdir -p /home/node/.myagent \
      && chown -R node:node /home/node/.myagent
