@@ -1,4 +1,8 @@
-FROM sbx-base
+FROM docker.io/library/node:26.13.0-trixie-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash ca-certificates git jq ripgrep \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /home/node/.pi/agent \
   && chmod 700 /home/node/.pi \

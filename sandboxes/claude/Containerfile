@@ -8,21 +8,25 @@ ENV PATH="/root/.local/bin:$PATH"
 
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-FROM sbx-base
+FROM docker.io/library/node:26.13.0-trixie-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash ca-certificates git jq ripgrep \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /home/node/.claude \
   && chmod 700 /home/node/.claude \
   && chown -R node:node /home/node/.claude
 
+COPY --from=install /root/.local/bin/claude /usr/local/bin/claude
+
 ENV CLAUDE_APPEND_SYSTEM_PROMPT_FILE=/opt/claude/APPEND_SYSTEM_PROMPT.txt
 COPY <<'EOF' ${CLAUDE_APPEND_SYSTEM_PROMPT_FILE}
-You are working inside a hardened Podman container as non-root `node` user (no sudo/apt access).
+You are working inside a hardened Podman container as non-root `node` user (no sudo/apt).
 - Root FS is read-only
 - Writable: cwd (bind-mounted from host), /tmp, /home/node/.claude
-- Installed tools: bash, fd-find (fd), git, jq, node/npm, ripgrep (rg)
+- Installed tools: bash, git, jq, node/npm, ripgrep (rg)
 EOF
-
-COPY --from=install /root/.local/bin/claude /usr/local/bin/claude
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

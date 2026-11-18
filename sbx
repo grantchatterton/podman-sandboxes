@@ -3,15 +3,12 @@ set -euo pipefail
 
 # sbx: build and run hardened Podman sandbox containers.
 #
-# Each sandbox lives in sandboxes/<name>/ and contains a Containerfile that
-# builds on top of the shared base image (base/Containerfile). A sandbox may
-# also include an optional `config` file, sourced at run time, to customize
-# the podman run invocation.
+# Each sandbox lives in sandboxes/<name>/ and is standalone: its Containerfile
+# is a complete image definition. A sandbox may also include an optional
+# `config` file, sourced at run time, to customize the podman run invocation.
 
 SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 readonly SCRIPT_DIR
-
-readonly BASE_DIR="$SCRIPT_DIR/base"
 
 readonly SANDBOXES_DIR="$SCRIPT_DIR/sandboxes"
 readonly SANDBOX_IMAGE_TAG_PREFIX="localhost/sbx-"
@@ -34,9 +31,8 @@ Commands:
   help
       Show this usage text.
   build <name>
-      Build the image for sandbox <name>. The shared base Containerfile is
-      prepended as the `sbx-base` build stage, so base and sandbox are built
-      together (unchanged layers are reused from the build cache).
+      Build the image for sandbox <name> from its Containerfile (unchanged
+      layers are reused from the build cache).
   run <name> [-- <agent args>...]
       Run sandbox <name> with the current directory bind-mounted read-write
       at the same path. The image is built first if it does not exist yet.
@@ -53,20 +49,9 @@ usage_die() {
   exit 1
 }
 
-# Builds the image for sandbox $1. The base Containerfile is concatenated in
-# front of the sandbox's Containerfile, so it becomes the `sbx-base` stage of a
-# single build; no separate base image is created. Layers are cached, so use
-# `podman build --no-cache` (or `podman image prune`) to force fresh installs.
+# Builds the image for sandbox $1 from its Containerfile. Layers are cached, so
+# use `podman build --no-cache` (or `podman image prune`) to force fresh installs.
 build_sbx_image() {
-  if [[ ! -d "$BASE_DIR" ]]; then
-    die "Base sandbox directory not found '$BASE_DIR'"
-  fi
-
-  local -r base_containerfile="$BASE_DIR/Containerfile"
-  if [[ ! -f "$base_containerfile" ]]; then
-    die "Base sandbox containerfile not found '$base_containerfile'"
-  fi
-
   local -r sbx_name="$1"
 
   local -r sbx_dir="$SANDBOXES_DIR/$sbx_name"
@@ -79,7 +64,7 @@ build_sbx_image() {
     die "Sandbox containerfile not found for '$sbx_name'"
   fi
 
-  podman build -t "${SANDBOX_IMAGE_TAG_PREFIX}$sbx_name" -f <(cat -- "$base_containerfile" "$sbx_containerfile") -- "$sbx_dir"
+  podman build -t "${SANDBOX_IMAGE_TAG_PREFIX}$sbx_name" -f "$sbx_containerfile" -- "$sbx_dir"
 }
 
 # sbx build <name>: (re)builds the sandbox image.
